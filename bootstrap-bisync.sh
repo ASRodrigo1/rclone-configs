@@ -28,7 +28,7 @@ remote_type(){
 }
 
 derive_s3_backup(){
-  # Constrói BKP a partir de PATH2 "remote:bucket/prefix..." -> "remote:bucket/_bisync_backups/<client>"
+  # De "remote:bucket/prefix..." -> "remote:bucket/_bisync_backups/<client>"
   local path="$1" client_id="$2"
   local remote="${path%%:*}"
   local after="${path#*:}"
@@ -55,11 +55,6 @@ Uso:
       [--interval 5min] \
       [--recreate] \
       [--purge-logs]
-
-Exemplo:
-  sudo ./bootstrap-bisync.sh \
-    --path1 "onedrive@geoia:/Adecoagro" \
-    --path2 "s3@geoia-clients:geoia-clients/Adecoagro"
 
 Padrões:
 - client: último segmento de path1
@@ -101,6 +96,7 @@ RCLONE_VER="$($RCLONE_BIN version | awk 'NR==1{print $2; exit}' | sed 's/^v//')"
 ver_ge "$RCLONE_VER" "$RCLONE_MIN" || fail "rclone >= $RCLONE_MIN é necessário (encontrado v$RCLONE_VER)"
 ensure_base_dirs
 
+# ===== entrada interativa mínima =====
 if [ "$NON_INTERACTIVE" = "0" ]; then
   echo "== Configuração interativa =="
   [ -n "$PATH1" ] || read -rp "Path1 (ex.: onedrive@geoia:/ClienteX): " PATH1
@@ -115,6 +111,7 @@ CLIENT_ID="$(sanitize_id "$CLIENT")"
 REMOTE1="${PATH1%%:*}"
 REMOTE2="${PATH2%%:*}"
 
+# ===== user + intervalo (interativo) =====
 if [ "$NON_INTERACTIVE" = "0" ]; then
   read -rp "Usuário systemd? [${SYSTEM_USER_DEFAULT}]: " _u || true
   SYSTEM_USER="${_u:-$SYSTEM_USER_DEFAULT}"
@@ -122,14 +119,17 @@ if [ "$NON_INTERACTIVE" = "0" ]; then
   INTERVAL="${_iv:-$INTERVAL}"
 fi
 
+# ===== rclone.conf do usuário =====
 RCLONE_CONFIG_PATH="/home/${SYSTEM_USER}/.config/rclone/rclone.conf"
 [ "$SYSTEM_USER" = "root" ] && RCLONE_CONFIG_PATH="/root/.config/rclone/rclone.conf"
 [ -f "$RCLONE_CONFIG_PATH" ] || fail "rclone.conf não encontrado: ${RCLONE_CONFIG_PATH} (rode 'rclone config' como ${SYSTEM_USER})"
 
 TYPE1="$(remote_type "$REMOTE1" "$SYSTEM_USER")"
 TYPE2="$(remote_type "$REMOTE2" "$SYSTEM_USER")"
+[ -n "$TYPE1" ] || echo "Aviso: não consegui detectar type do remote '$REMOTE1' (seguindo)"
+[ -n "$TYPE2" ] || echo "Aviso: não consegui detectar type do remote '$REMOTE2' (seguindo)"
 
-# Backups padrão
+# ===== backups padrão =====
 [ -n "$BKP1" ] || BKP1="${REMOTE1}:/_bisync_backups/${CLIENT_ID}"
 if [ -z "$BKP2" ]; then
   if [ "$TYPE2" = "s3" ]; then
@@ -139,7 +139,7 @@ if [ -z "$BKP2" ]; then
   fi
 fi
 
-# Resumo editável
+# ===== resumo editável =====
 if [ "$NON_INTERACTIVE" = "0" ]; then
   while true; do
     echo
@@ -173,7 +173,7 @@ if [ "$NON_INTERACTIVE" = "0" ]; then
   done
 fi
 
-# proteção: backup não pode ficar dentro da raiz
+# ===== proteção: backups fora da raiz =====
 case "$BKP1" in
   "$PATH1"/*|"$PATH1") fail "Backup1 ($BKP1) não pode ficar DENTRO de Path1 ($PATH1)";;
 esac
@@ -181,7 +181,7 @@ case "$BKP2" in
   "$PATH2"/*|"$PATH2") fail "Backup2 ($BKP2) não pode ficar DENTRO de Path2 ($PATH2)";;
 esac
 
-# paths finais por instância
+# ===== paths por instância =====
 ENV_FILE="$ENV_DIR/${CLIENT_ID}.env"
 WORKDIR="$WORKDIR_BASE/$CLIENT_ID"
 LOGDIR="$LOGDIR_BASE/$CLIENT_ID"
@@ -190,7 +190,7 @@ LOG_INIT="$LOGDIR/bisync-init.log"
 LOG_RUN="$LOGDIR/bisync.log"
 SENTINEL=".healthcheck-${CLIENT_ID}"
 
-# flags extras por provider
+# ===== flags extras por provider (usadas só no bisync!) =====
 EXTRA_FLAGS=""
 case "$TYPE1" in
   onedrive) EXTRA_FLAGS+=" --onedrive-delta";;
@@ -202,27 +202,30 @@ case "$TYPE2" in
 esac
 EXTRA_FLAGS="$(echo "$EXTRA_FLAGS" | xargs || true)"
 
-# dirs locais com ownership do usuário do serviço
-install -d -m 775 -o "$SYSTEM_USER" -g "$SYSTEM_USER" "$WORKDIR" "$LOGDIR"
-
-# ======== recriação segura ========
+# ===== recriação segura =====
 INSTANCE="${UNIT_BASENAME}@${CLIENT_ID}"
 if systemctl list-timers --all 2>/dev/null | grep -q "${INSTANCE}.timer" || [ -f "$ENV_FILE" ]; then
   if [ "$FORCE_RECREATE" = "1" ] || yn "Instância '${CLIENT_ID}' já existe. Recriar do zero?"; then
-    systemctl stop "${INSTANCE}.timer" 2>/dev/null || true
-    systemctl stop "${INSTANCE}.service" 2>/dev/null || true
+    systemctl stop "${INSTANCE}.timer"    2>/dev/null || true
+    systemctl stop "${INSTANCE}.service"  2>/dev/null || true
     systemctl disable "${INSTANCE}.timer" 2>/dev/null || true
+    systemctl reset-failed "${INSTANCE}.service" 2>/dev/null || true
+    systemctl reset-failed "${INSTANCE}.timer"   2>/dev/null || true
     rm -f "$ENV_FILE"
     rm -rf "/etc/systemd/system/${UNIT_BASENAME}@${CLIENT_ID}.service.d"
     rm -rf "$WORKDIR"
     [ "$PURGE_LOGS" = "1" ] && rm -rf "$LOGDIR"
+    systemctl daemon-reload
     echo "Instância '${CLIENT_ID}' removida."
   else
     echo "Mantendo instância existente. Nada a fazer."; exit 0
   fi
 fi
 
-# ======== ENV do cliente ========
+# >>> cria diretórios locais AGORA (após limpeza) <<<
+install -d -m 775 -o "$SYSTEM_USER" -g "$SYSTEM_USER" "$WORKDIR" "$LOGDIR"
+
+# ===== ENV do cliente =====
 cat >"$ENV_FILE"<<EOF
 # Gerado por $0 em $(date -Is)
 OD="$PATH1"
@@ -238,14 +241,16 @@ TIME_FLAGS="--timeout 10m --contimeout 15s"
 LOG_FLAGS="--use-json-log --stats 30s --stats-log-level NOTICE --log-level INFO"
 
 WORKDIR="$WORKDIR"
+LOGDIR="$LOGDIR"
 INIT_MARK="$INIT_MARK"
 LOG_INIT="$LOG_INIT"
 LOG_RUN="$LOG_RUN"
 SENTINEL="$SENTINEL"
+MAX_DELETE="10000"
 EOF
 echo "ENV criado: $ENV_FILE"
 
-# ======== templates ========
+# ===== templates =====
 SERVICE="/etc/systemd/system/${UNIT_BASENAME}@.service"
 TIMER="/etc/systemd/system/${UNIT_BASENAME}@.timer"
 
@@ -259,15 +264,19 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=/etc/rclone/bisync/%i.env
 
-# IMPORTANTE: usamos /bin/bash -lc para permitir word-splitting das FLAGS vindas do .env
+# Segurança: garante diretórios locais existentes (pode já existir, ok)
+ExecStartPre=/bin/mkdir -p "${WORKDIR}" "${LOGDIR}"
 
-# Materializa prefixos e sentinela efêmero
-ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${OD}/${SENTINEL}\" ${EXTRA_FLAGS} || true"
-ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${S3}/${SENTINEL}\" ${EXTRA_FLAGS} || true"
-ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${BOD}/.keep\" ${EXTRA_FLAGS} || true"
-ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${BS3}/.keep\" ${EXTRA_FLAGS} || true"
+# IMPORTANTE: usar /bin/bash -lc para que ${EXTRA_FLAGS} seja splitado corretamente.
+# (systemd não faz word-splitting de variáveis em ExecStart*)
 
-# Resync idempotente apenas se não inicializado
+# Materializa sentinela e diretórios de backup (sem flags extras aqui)
+ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${OD}/${SENTINEL}\" || true"
+ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${S3}/${SENTINEL}\" || true"
+ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${BOD}/.keep\" || true"
+ExecStartPre=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" touch \"${BS3}/.keep\" || true"
+
+# Resync idempotente (somente se não inicializado)
 ExecStartPre=/bin/bash -lc "\
   if [ ! -f \"${INIT_MARK}\" ]; then \
     __RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" bisync \"${OD}\" \"${S3}\" \
@@ -278,7 +287,7 @@ ExecStartPre=/bin/bash -lc "\
       ${CONFLICT_FLAGS} \
       --fix-case ${EXTRA_FLAGS} \
       --backup-dir1 \"${BOD}\" --backup-dir2 \"${BS3}\" \
-      --max-delete 25% \
+      --max-delete ${MAX_DELETE} \
       --retries 5 --retries-sleep 30s --resilient --recover \
       ${TRANS_FLAGS} ${TIME_FLAGS} \
       ${LOG_FLAGS} \
@@ -294,17 +303,17 @@ ExecStart=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" bisync \"$
   ${CONFLICT_FLAGS} \
   --fix-case ${EXTRA_FLAGS} \
   --backup-dir1 \"${BOD}\" --backup-dir2 \"${BS3}\" \
-  --max-delete 25% \
+  --max-delete ${MAX_DELETE} \
   --retries 5 --retries-sleep 30s --resilient --recover --max-lock 30m \
   ${TRANS_FLAGS} ${TIME_FLAGS} \
   ${LOG_FLAGS} \
   --log-file \"${LOG_RUN}\""
 
-# Limpeza do sentinela (sempre tentar)
-ExecStartPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${OD}/${SENTINEL}\" ${EXTRA_FLAGS} || true"
-ExecStartPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${S3}/${SENTINEL}\" ${EXTRA_FLAGS} || true"
-ExecStopPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${OD}/${SENTINEL}\" ${EXTRA_FLAGS} || true"
-ExecStopPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${S3}/${SENTINEL}\" ${EXTRA_FLAGS} || true"
+# Limpeza do sentinela
+ExecStartPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${OD}/${SENTINEL}\" || true"
+ExecStartPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${S3}/${SENTINEL}\" || true"
+ExecStopPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${OD}/${SENTINEL}\" || true"
+ExecStopPost=/bin/bash -lc "__RCLONE_BIN__ --config \"${RCLONE_CONFIG}\" deletefile \"${S3}/${SENTINEL}\" || true"
 
 # Jobs longos (arquivos grandes)
 TimeoutStartSec=0
@@ -330,7 +339,7 @@ sed -i "s#__INTERVAL__#${INTERVAL}#g" "$TIMER"
 sed -i "s#__UNIT__#${UNIT_BASENAME}#g" "$TIMER"
 sed -i "s#__RCLONE_BIN__#${RCLONE_BIN}#g" "$SERVICE"
 
-# ======== drop-in por instância: define usuário + RCLONE_CONFIG ========
+# ===== drop-in por instância: define usuário + RCLONE_CONFIG =====
 DROPIN_DIR="/etc/systemd/system/${UNIT_BASENAME}@${CLIENT_ID}.service.d"
 mkdir -p "$DROPIN_DIR"
 HOME_DIR="/home/${SYSTEM_USER}"; [ "$SYSTEM_USER" = "root" ] && HOME_DIR="/root"
@@ -342,13 +351,13 @@ Group=${SYSTEM_USER}
 Environment="HOME=${HOME_DIR}"
 Environment="XDG_CONFIG_HOME=${HOME_DIR}/.config"
 Environment="RCLONE_CONFIG=${RCLONE_CONFIG_PATH}"
-# Garante dirs com owner correto em cada rodada
-ExecStartPre=/usr/bin/install -d -o ${SYSTEM_USER} -g ${SYSTEM_USER} ${WORKDIR} ${LOGDIR}
 EOF
 
-# ======== systemd ========
+# ===== systemd =====
 systemctl daemon-reload
 systemctl enable --now "${UNIT_BASENAME}@${CLIENT_ID}.timer"
+# âncora o timer: dispara 1ª execução agora
+systemctl start "${UNIT_BASENAME}@${CLIENT_ID}.service" || true
 
 echo
 echo "Pronto! Timer ligado para '${CLIENT_ID}'. Comandos úteis:"
