@@ -1,8 +1,14 @@
-# Rclone Bisync Bootstrap Script
+# Rclone Configuration Tools
 
-## What is this?
+This repository contains tools for setting up and managing rclone-based file synchronization and logging solutions.
 
-This script automatically sets up **automatic file synchronization** between two cloud storage locations (like Google Drive, OneDrive, Amazon S3, etc.) using rclone. Think of it as a "set it and forget it" solution that keeps your files in sync across different cloud services.
+## Scripts Overview
+
+### 1. bootstrap-bisync.sh
+Automatically sets up **automatic file synchronization** between two cloud storage locations (like Google Drive, OneDrive, Amazon S3, etc.) using rclone. Think of it as a "set it and forget it" solution that keeps your files in sync across different cloud services.
+
+### 2. bootstrap-mezmo-agent.sh
+Automatically configures the **Mezmo (formerly LogDNA) agent** to collect and send rclone logs to the Mezmo observability platform. This provides centralized log management, monitoring, and alerting for your file synchronization operations.
 
 ## What does it do?
 
@@ -14,12 +20,17 @@ This script automatically sets up **automatic file synchronization** between two
 
 ## Prerequisites
 
-Before using this script, you need:
-
+### For bootstrap-bisync.sh:
 - **Linux system** (Ubuntu, CentOS, etc.)
 - **rclone installed** (version 1.68.0 or newer)
 - **rclone configured** with your cloud storage accounts
 - **Administrator access** (sudo privileges)
+
+### For bootstrap-mezmo-agent.sh:
+- **Linux system** (Ubuntu, CentOS, etc.)
+- **Mezmo ingestion key** (from your Mezmo account)
+- **Administrator access** (sudo privileges)
+- **Internet connectivity** (to download and install the agent)
 
 ## How to use
 
@@ -57,13 +68,38 @@ sudo ./bootstrap-bisync.sh \
   --interval "1h"
 ```
 
+### Setting up Mezmo logging
+
+**Basic setup (interactive):**
+```bash
+sudo ./bootstrap-mezmo-agent.sh
+```
+
+**Non-interactive setup with environment variables:**
+```bash
+sudo MEZMO_KEY="your-ingestion-key" ./bootstrap-mezmo-agent.sh
+```
+
+**Custom tags setup:**
+```bash
+sudo MEZMO_KEY="your-key" MEZMO_TAGS="rclone,production,backup" ./bootstrap-mezmo-agent.sh
+```
+
 ## What happens after setup?
 
+### bootstrap-bisync.sh:
 1. **Script creates** a scheduled task that runs automatically
 2. **First run** does a full sync (this may take a while)
 3. **Subsequent runs** only sync changes (much faster)
 4. **Logs are created** in `/var/log/rclone/[client-name]/`
 5. **Backups are stored** in `_bisync_backups` folders on both locations
+
+### bootstrap-mezmo-agent.sh:
+1. **Agent is installed** automatically if not present
+2. **Configuration is created** in `/etc/logdna/config.yaml`
+3. **Systemd service is configured** with proper overrides
+4. **Agent starts automatically** and begins collecting logs
+5. **Logs are sent to Mezmo** platform for centralized monitoring
 
 ## Managing your sync jobs
 
@@ -100,6 +136,29 @@ sudo systemctl start rclone-bisync@[client-name].timer
 sudo systemctl start rclone-bisync@[client-name].service
 ```
 
+### Managing Mezmo agent
+
+**Check status:**
+```bash
+# Check if the agent is running
+systemctl status logdna-agent
+
+# View recent logs
+journalctl -u logdna-agent -n 50
+```
+
+**Control the agent:**
+```bash
+# Stop the agent
+sudo systemctl stop logdna-agent
+
+# Start the agent
+sudo systemctl start logdna-agent
+
+# Restart the agent
+sudo systemctl restart logdna-agent
+```
+
 ### Graceful shutdown
 The services are configured to stop gracefully, allowing rclone to complete current operations:
 - **SIGINT handling**: Services respond to interrupt signals properly
@@ -108,6 +167,7 @@ The services are configured to stop gracefully, allowing rclone to complete curr
 
 ## Safety features
 
+### bootstrap-bisync.sh:
 - **Automatic backups**: Deleted files are saved before removal
 - **Conflict resolution**: Newer files automatically win conflicts
 - **Error recovery**: Failed syncs are retried automatically
@@ -115,14 +175,27 @@ The services are configured to stop gracefully, allowing rclone to complete curr
 - **Lock protection**: Prevents multiple sync jobs from running simultaneously
 - **Graceful shutdown**: Services stop cleanly without data corruption
 
+### bootstrap-mezmo-agent.sh:
+- **Secure configuration**: Configuration file has restricted permissions (600)
+- **Automatic installation**: Installs agent if not present on supported systems
+- **Environment isolation**: Prevents conflicts with existing configurations
+- **Service validation**: Verifies agent starts successfully before completing
+
 ## Troubleshooting
 
 ### Common issues
 
+#### bootstrap-bisync.sh:
 1. **"rclone not found"**: Install rclone first
 2. **"Permission denied"**: Make sure you're running with sudo
 3. **"Config not found"**: Run `rclone config` to set up your accounts
 4. **Sync not starting**: Check if the timer is enabled and running
+
+#### bootstrap-mezmo-agent.sh:
+1. **"ingestion key vazia"**: Provide a valid Mezmo ingestion key
+2. **"não sei instalar automaticamente"**: Install logdna-agent package manually
+3. **Agent not starting**: Check systemd logs and verify configuration
+4. **Logs not appearing in Mezmo**: Verify internet connectivity and key validity
 
 ### Getting help
 
@@ -159,14 +232,33 @@ sudo ./bootstrap-bisync.sh \
   --bkp2 "dest:/custom/backup/path"
 ```
 
+### Mezmo agent customization
+
+**Environment variables:**
+- **`MEZMO_KEY`**: Your Mezmo ingestion key
+- **`MEZMO_TAGS`**: Custom tags for log categorization (default: "rclone,bisync")
+
+**Configuration file location:**
+- **`/etc/logdna/config.yaml`**: Main configuration file
+- **`/etc/systemd/system/logdna-agent.service.d/override.conf`**: Systemd overrides
+
 ## How it works (simplified)
 
+### bootstrap-bisync.sh:
 1. **Script analyzes** your cloud storage locations
 2. **Creates system service** that runs rclone bisync
 3. **Sets up timer** to run the service automatically
 4. **First run** does complete file comparison and sync
 5. **Ongoing runs** only sync new/changed/deleted files
 6. **Everything is logged** for monitoring and troubleshooting
+
+### bootstrap-mezmo-agent.sh:
+1. **Script collects** your Mezmo ingestion key
+2. **Installs agent** automatically if not present
+3. **Creates configuration** with secure settings
+4. **Configures systemd** service with proper overrides
+5. **Starts agent** and validates it's working
+6. **Logs are collected** and sent to Mezmo platform
 
 ## Support
 
