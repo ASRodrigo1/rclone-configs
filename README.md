@@ -100,6 +100,12 @@ sudo systemctl start rclone-bisync@[client-name].timer
 sudo systemctl start rclone-bisync@[client-name].service
 ```
 
+### Graceful shutdown
+The services are configured to stop gracefully, allowing rclone to complete current operations:
+- **SIGINT handling**: Services respond to interrupt signals properly
+- **Timeout protection**: 2-minute grace period for clean shutdown
+- **Data safety**: Prevents corruption during service stops
+
 ## Safety features
 
 - **Automatic backups**: Deleted files are saved before removal
@@ -107,6 +113,7 @@ sudo systemctl start rclone-bisync@[client-name].service
 - **Error recovery**: Failed syncs are retried automatically
 - **Health checks**: Script verifies both locations are accessible
 - **Lock protection**: Prevents multiple sync jobs from running simultaneously
+- **Graceful shutdown**: Services stop cleanly without data corruption
 
 ## Troubleshooting
 
