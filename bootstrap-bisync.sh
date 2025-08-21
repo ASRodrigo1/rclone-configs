@@ -339,6 +339,17 @@ sed -i "s#__INTERVAL__#${INTERVAL}#g" "$TIMER"
 sed -i "s#__UNIT__#${UNIT_BASENAME}#g" "$TIMER"
 sed -i "s#__RCLONE_BIN__#${RCLONE_BIN}#g" "$SERVICE"
 
+# ===== drop-in base: parada graciosa com SIGINT =====
+BASE_DROPIN_DIR="/etc/systemd/system/${UNIT_BASENAME}@.service.d"
+mkdir -p "$BASE_DROPIN_DIR"
+cat >"${BASE_DROPIN_DIR}/20-signal.conf"<<'EOF'
+[Service]
+KillSignal=SIGINT
+ExecStop=/bin/kill -SIGINT $MAINPID
+SuccessExitStatus=SIGINT 130 143
+TimeoutStopSec=2min
+EOF
+
 # ===== drop-in por instância: define usuário + RCLONE_CONFIG =====
 DROPIN_DIR="/etc/systemd/system/${UNIT_BASENAME}@${CLIENT_ID}.service.d"
 mkdir -p "$DROPIN_DIR"
