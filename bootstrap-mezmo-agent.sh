@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # bootstrap-mezmo-agent.sh
-# - Configura logdna/Mezmo agent pedindo apenas a ingestion key
-# - Cria YAML, drop-in do systemd e habilita o agente
+# - Configures Mezmo (LogDNA) agent asking only for the ingestion key
+# - Creates YAML, systemd drop-in, and enables the agent
 
 SERVICE="logdna-agent"
 BIN="/usr/bin/${SERVICE}"
@@ -14,42 +14,42 @@ OVRD_FILE="${OVRD_DIR}/override.conf"
 
 # ===== helpers =====
 fail(){ echo "ERROR: $*" >&2; exit 1; }
-need_root(){ [ "$(id -u)" -eq 0 ] || fail "rode com sudo/root"; }
+need_root(){ [ "$(id -u)" -eq 0 ] || fail "run as sudo/root"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
 need_root
 
-# ===== coleta da key (único prompt) =====
+# ===== get the key (only prompt) =====
 KEY="${MEZMO_KEY:-}"
 if [ -z "${KEY}" ]; then
   read -rsp "Mezmo ingestion key: " KEY; echo
 fi
-[ -n "${KEY}" ] || fail "ingestion key vazia"
+[ -n "${KEY}" ] || fail "empty ingestion key"
 
-# ===== instala agente se não existir =====
+# ===== install agent if missing =====
 if [ ! -x "${BIN}" ]; then
-  echo "Agente não encontrado, tentando instalar..."
+  echo "Agent not found, attempting to install..."
   if have apt-get; then
     apt-get update -y
-    apt-get install -y logdna-agent || fail "instalação via apt falhou"
+    apt-get install -y logdna-agent || fail "installation via apt failed"
   elif have dnf; then
-    dnf install -y logdna-agent || fail "instalação via dnf falhou"
+    dnf install -y logdna-agent || fail "installation via dnf failed"
   elif have yum; then
-    yum install -y logdna-agent || fail "instalação via yum falhou"
+    yum install -y logdna-agent || fail "installation via yum failed"
   else
-    fail "não sei instalar automaticamente neste sistema — instale o pacote 'logdna-agent' e rode de novo"
+    fail "cannot install automatically on this system — install the 'logdna-agent' package and run again"
   fi
 fi
 
-# ===== prepara diretórios =====
+# ===== prepare directories =====
 install -d -m 755 "${CONFIG_DIR}"
 install -d -m 755 /var/log/rclone
 
-# Permite customizar tags sem novo prompt (opcional)
+# Allow tags customization without another prompt (optional)
 HOSTNAME_VAL="$(hostname -s 2>/dev/null || hostname)"
 TAGS_VAL="${MEZMO_TAGS:-rclone,bisync}"
 
-# ===== escreve config.yaml (idempotente) =====
+# ===== write config.yaml (idempotent) =====
 umask 077
 cat >"${CONFIG_FILE}" <<EOF
 http:
@@ -84,39 +84,39 @@ k8s:
   enabled: false
 EOF
 chmod 600 "${CONFIG_FILE}"
-echo "config escrito em ${CONFIG_FILE}"
+echo "config written to ${CONFIG_FILE}"
 
-# ===== drop-in do systemd =====
+# ===== systemd drop-in =====
 install -d -m 755 "${OVRD_DIR}"
 cat >"${OVRD_FILE}" <<EOF
 [Service]
-# aponta explicitamente para o YAML que criamos
+# explicitly point to the YAML we created
 Environment="MZ_CONFIG_FILE=${CONFIG_FILE}"
 Environment="LOGDNA_CONFIG_FILE=${CONFIG_FILE}"
-# desliga tailer do journal também por env (além do YAML)
+# disable journal tailer via env as well (in addition to YAML)
 Environment="MZ_SYSTEMD_JOURNAL_TAILER=false"
-# evita conflitos caso /etc/logdna.env defina diretórios/padrões
+# avoid conflicts if /etc/logdna.env sets dirs/patterns
 UnsetEnvironment=LOGDNA_LOG_DIRS LOGDNA_INCLUSION_RULES MZ_LOG_DIRS MZ_INCLUSION_RULES
 EOF
 
-# ===== aplica e sobe =====
+# ===== apply and start =====
 systemctl daemon-reload
-# limpa falhas antigas (se houver)
+# clear any previous failures (if any)
 systemctl reset-failed "${SERVICE}" 2>/dev/null || true
 systemctl enable --now "${SERVICE}"
 
-# ===== verificação rápida =====
+# ===== quick check =====
 sleep 1
 if systemctl is-active --quiet "${SERVICE}"; then
-  echo "✅ ${SERVICE} ativo e habilitado no boot."
+  echo "✅ ${SERVICE} is active and enabled on boot."
 else
-  echo "⚠️ ${SERVICE} não ficou ativo; últimos logs:"
+  echo "⚠️ ${SERVICE} is not active; recent logs:"
   journalctl -u "${SERVICE}" -n 50 --no-pager || true
   exit 1
 fi
 
 echo
-echo "Pronto! Logs de /var/log/rclone/*.log serão enviados."
-echo "Comandos úteis:"
+echo "Done! Logs from /var/log/rclone/*.log will be shipped."
+echo "Useful commands:"
 echo "  journalctl -u ${SERVICE} -n 200 --no-pager"
 echo "  systemctl status ${SERVICE}"
